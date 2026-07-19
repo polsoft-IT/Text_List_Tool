@@ -1,0 +1,8 @@
+# Zależności potrzebne wyłącznie do URUCHOMIENIA i ZBUDOWANIA edycji PyQt6
+# Text List Tool - polsoft.ITS(TM) Group
+#
+# Instalacja:  pip install -r requirements-qt.txt
+# (build_qt.bat robi to automatycznie)
+
+PyQt6>=6.6
+pyinstaller>=6.0
