@@ -9,6 +9,7 @@ Author: Sebastian Januchowski / polsoft.ITS Group
 import json
 import os
 import sys
+import re
 
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QPainterPath, QPen, QColor, QPolygonF, QCursor
@@ -469,6 +470,7 @@ class TextListApp(QWidget):
         paste_row = QHBoxLayout()
         self.bulk_text = QTextEdit()
         self.bulk_text.setFixedHeight(90)
+        self.bulk_text.textChanged.connect(self._on_bulk_change)
         paste_row.addWidget(self.bulk_text, 1)
 
         self.split_btn = QPushButton("⬇")
@@ -615,7 +617,7 @@ class TextListApp(QWidget):
         self.ontop_btn.style().unpolish(self.ontop_btn)
         self.ontop_btn.style().polish(self.ontop_btn)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.always_on_top)
-        self.show()  # re-apply window flags (Qt requires re-showing the window)
+        self.show()
         self.save_data()
 
     def enter_compact_mode(self):
@@ -687,11 +689,54 @@ class TextListApp(QWidget):
         dlg.exec()
 
     # ------------------------------------------------------------------
+    # Intelligent split helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _strip_bullet_prefix(line: str) -> str:
+        # remove common bullet / numbering prefixes: "-", "•", "*", "1.", "1)"
+        line = line.lstrip()
+        bullet_patterns = [
+            r"^[-•*]\s+",
+            r"^\d+\.\s+",
+            r"^\d+\)\s+",
+        ]
+        for pat in bullet_patterns:
+            line = re.sub(pat, "", line)
+        return line.strip()
+
+    def _smart_split_text(self, text: str) -> list[str]:
+        # normalize whitespace
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+", " ", text)
+
+        # if there are many semicolons or commas, treat them as separators
+        sep_candidates = []
+        if text.count(";") >= 3:
+            sep_candidates.append(";")
+        if text.count(",") >= 3:
+            sep_candidates.append(",")
+
+        if sep_candidates:
+            # split on chosen separators + newlines
+            pattern = r"[\n" + "".join(re.escape(s) for s in sep_candidates) + r"]+"
+            raw_parts = re.split(pattern, text)
+        else:
+            # default: split by newlines
+            raw_parts = text.split("\n")
+
+        lines = []
+        for ln in raw_parts:
+            ln = self._strip_bullet_prefix(ln)
+            if ln:
+                lines.append(ln)
+        return lines
+
+    # ------------------------------------------------------------------
     # Core actions
     # ------------------------------------------------------------------
     def split_to_list(self):
         text = self.bulk_text.toPlainText()
-        lines = [ln.strip() for ln in text.split("\n") if ln.strip() != ""]
+        lines = self._smart_split_text(text)
         for i in range(NUM_ITEMS):
             self.entries[i].blockSignals(True)
             self.entries[i].setText(lines[i] if i < len(lines) else "")
@@ -765,15 +810,19 @@ class TextListApp(QWidget):
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(values))
-            self.status_label.setText(self.t("status_exported"))
-            self.status_label.setProperty("state", "saved")
-            self.status_label.style().unpolish(self.status_label)
-            self.status_label.style().polish(self.status_label)
-            self._status_timer.start(1500)
-        except OSError as err:
+        except Exception as err:
             QMessageBox.critical(
-                self, self.t("export_error_title"), self.t("export_error_msg").format(err=err)
+                self,
+                self.t("export_error_title"),
+                self.t("export_error_msg").format(err=str(err)),
             )
+            return
+
+        self.status_label.setText(self.t("status_exported"))
+        self.status_label.setProperty("state", "saved")
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+        self._status_timer.start(1500)
 
     def import_from_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -783,105 +832,109 @@ class TextListApp(QWidget):
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
-                lines = [ln.strip() for ln in f.read().split("\n") if ln.strip() != ""]
-        except OSError as err:
+                content = f.read()
+        except Exception as err:
             QMessageBox.critical(
-                self, self.t("import_error_title"), self.t("import_error_msg").format(err=err)
+                self,
+                self.t("import_error_title"),
+                self.t("import_error_msg").format(err=str(err)),
             )
             return
 
-        for i in range(NUM_ITEMS):
-            self.entries[i].blockSignals(True)
-            self.entries[i].setText(lines[i] if i < len(lines) else "")
-            self.entries[i].blockSignals(False)
-        self._update_status()
-        self.save_data()
+        self.bulk_text.blockSignals(True)
+        self.bulk_text.setPlainText(content)
+        self.bulk_text.blockSignals(False)
+        self.split_to_list()
         self.status_label.setText(self.t("status_imported"))
         self.status_label.setProperty("state", "saved")
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
         self._status_timer.start(1500)
 
-    def _update_status(self):
-        n = sum(1 for e in self.entries if e.text().strip() != "")
-        self.status_label.setProperty("state", "")
-        self.status_label.setText(self.t("status_filled").format(n=n, total=NUM_ITEMS))
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
+    # ------------------------------------------------------------------
+    # Data persistence
+    # ------------------------------------------------------------------
+    def _on_entry_change(self):
+        self._update_status()
+        self._schedule_save()
 
-    def _flash_saved_status(self):
-        self.status_label.setText(self.t("status_saved"))
-        self.status_label.setProperty("state", "saved")
+    def _on_bulk_change(self):
+        self._schedule_save()
+
+    def _schedule_save(self):
+        self._save_timer.start(500)
+
+    def _update_status(self):
+        filled = sum(1 for e in self.entries if e.text().strip() != "")
+        self.status_label.setText(self.t("status_filled").format(n=filled, total=NUM_ITEMS))
+        self.status_label.setProperty("state", "")
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
-        self._status_timer.start(1200)
 
     def _revert_status(self):
         self._update_status()
 
-    # ------------------------------------------------------------------
-    # Persistence: remember list contents + settings across restarts
-    # ------------------------------------------------------------------
-    def _load_settings(self):
-        """Load lang/theme/always_on_top before the UI is built, so the
-        window opens directly in the user's last-used language & theme."""
-        if not os.path.exists(DATA_PATH):
-            return
-        try:
-            with open(DATA_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if data.get("lang") in STRINGS:
-                self.lang = data["lang"]
-            if data.get("theme") in THEMES:
-                self.theme_name = data["theme"]
-            self.always_on_top = bool(data.get("always_on_top", False))
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass  # corrupted or unreadable file - start fresh, don't crash
-
-    def load_data(self):
-        if self.always_on_top:
-            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        if not os.path.exists(DATA_PATH):
-            return
-        try:
-            with open(DATA_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            items = data.get("items", [])
-            for i in range(min(NUM_ITEMS, len(items))):
-                self.entries[i].blockSignals(True)
-                self.entries[i].setText(items[i])
-                self.entries[i].blockSignals(False)
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass  # corrupted or unreadable file - start fresh, don't crash
-
     def save_data(self):
-        items = [entry.text() for entry in self.entries]
-        payload = {
-            "items": items,
+        data = {
             "lang": self.lang,
             "theme": self.theme_name,
             "always_on_top": self.always_on_top,
+            "bulk_text": self.bulk_text.toPlainText(),
+            "items": [e.text() for e in self.entries],
         }
         try:
             with open(DATA_PATH, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            self._flash_saved_status()
-        except OSError:
-            pass  # if the folder isn't writable, silently skip saving
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            return
+        self.status_label.setText(self.t("status_saved"))
+        self.status_label.setProperty("state", "saved")
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+        self._status_timer.start(1500)
 
-    def _on_entry_change(self, _text=None):
+    def load_data(self):
+        if not os.path.exists(DATA_PATH):
+            return
+        try:
+            with open(DATA_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+
+        bulk = data.get("bulk_text", "")
+        self.bulk_text.blockSignals(True)
+        self.bulk_text.setPlainText(bulk)
+        self.bulk_text.blockSignals(False)
+
+        items = data.get("items", [])
+        for i in range(NUM_ITEMS):
+            self.entries[i].blockSignals(True)
+            self.entries[i].setText(items[i] if i < len(items) else "")
+            self.entries[i].blockSignals(False)
+
         self._update_status()
-        self._save_timer.start(400)  # debounce: write 400ms after the last keystroke
 
-    def closeEvent(self, event):
-        self.save_data()
-        super().closeEvent(event)
+    def _load_settings(self):
+        if not os.path.exists(DATA_PATH):
+            return
+        try:
+            with open(DATA_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+
+        self.lang = data.get("lang", self.lang)
+        self.theme_name = data.get("theme", self.theme_name)
+        self.always_on_top = data.get("always_on_top", self.always_on_top)
+        if self.always_on_top:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
 
 
 def main():
     app = QApplication(sys.argv)
-    window = TextListApp()
-    window.show()
+    win = TextListApp()
+    win.show()
     sys.exit(app.exec())
 
 
