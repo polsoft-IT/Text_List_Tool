@@ -1,12 +1,16 @@
 {
+  "lang": "en",
+  "theme": "light",
+  "always_on_top": false,
+  "bulk_text": "# Zależności potrzebne wyłącznie do URUCHOMIENIA i ZBUDOWANIA edycji PyQt6\n# Text List Tool - polsoft.ITS(TM) Group\n#\n# Instalacja:  pip install -r requirements-qt.txt\n# (build_qt.bat robi to automatycznie)\n\nPyQt6>=6.6\npyinstaller>=6.0\n",
   "items": [
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
+    "# Zależności potrzebne wyłącznie do URUCHOMIENIA i ZBUDOWANIA edycji PyQt6",
+    "# Text List Tool - polsoft.ITS(TM) Group",
+    "#",
+    "# Instalacja: pip install -r requirements-qt.txt",
+    "# (build_qt.bat robi to automatycznie)",
+    "PyQt6>=6.6",
+    "pyinstaller>=6.0",
     "",
     "",
     "",
@@ -15,8 +19,5 @@
     "",
     "",
     ""
-  ],
-  "lang": "en",
-  "theme": "dark",
-  "always_on_top": false
+  ]
 }
